@@ -29,7 +29,7 @@
   <depend>generate_parameter_library</depend>
   <depend>geometry_msgs</depend>
   <depend>hardware_interface</depend>
-  <depend>joint_trajectory_controller</depend>
+  <!-- <depend>joint_trajectory_controller</depend> -->
   <depend>lifecycle_msgs</depend>
   <depend>pluginlib</depend>
   <depend>rclcpp_lifecycle</depend>

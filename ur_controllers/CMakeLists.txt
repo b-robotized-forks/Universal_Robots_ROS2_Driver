@@ -10,7 +10,7 @@ find_package(ament_cmake REQUIRED)
 find_package(angles REQUIRED)
 find_package(controller_interface REQUIRED)
 find_package(geometry_msgs REQUIRED)
-find_package(joint_trajectory_controller REQUIRED)
+# find_package(joint_trajectory_controller REQUIRED)
 find_package(lifecycle_msgs REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
@@ -32,7 +32,7 @@ set(THIS_PACKAGE_INCLUDE_DEPENDS
   angles
   controller_interface
   geometry_msgs
-  joint_trajectory_controller
+  # joint_trajectory_controller
   lifecycle_msgs
   pluginlib
   rclcpp_lifecycle
