@@ -34,6 +34,7 @@
   <xacro:arg name="script_sender_port" default="50002"/>
   <xacro:arg name="trajectory_port" default="50003"/>
   <xacro:arg name="verify_robot_model" default="false" />
+  <xacro:arg name="rw_rate" default="0" />
   <!--   tool communication related parameters-->
   <xacro:arg name="use_tool_communication" default="false" />
   <xacro:arg name="tool_voltage" default="0" />
@@ -104,6 +105,7 @@
     trajectory_port="$(arg trajectory_port)"
     ur_type="$(arg ur_type)"
     verify_robot_model="$(arg verify_robot_model)"
+    rw_rate="$(arg rw_rate)"
   />
 
 </robot>
