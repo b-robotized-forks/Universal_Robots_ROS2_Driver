@@ -83,15 +83,15 @@ RobotStateHelper::RobotStateHelper(const rclcpp::Node::SharedPtr& node)
   } else {
     // Service to restart safety
     restart_safety_srv_ = node_->create_client<std_srvs::srv::Trigger>(
-        "dashboard_client/restart_safety", rclcpp::QoS(rclcpp::KeepLast(10)), service_cb_grp_);
+        "dashboard_client/restart_safety", rclcpp::QoS(10).get_rmw_qos_profile(), service_cb_grp_);
     // Service to start UR program execution on the robot
     play_program_srv_ = node_->create_client<std_srvs::srv::Trigger>(
-        "dashboard_client/play", rclcpp::QoS(rclcpp::KeepLast(10)), service_cb_grp_);
+        "dashboard_client/play", rclcpp::QoS(10).get_rmw_qos_profile(), service_cb_grp_);
     play_program_srv_->wait_for_service();
   }
 
   resend_robot_program_srv_ = node_->create_client<std_srvs::srv::Trigger>(
-      "io_and_status_controller/resend_robot_program", rclcpp::QoS(rclcpp::KeepLast(10)), service_cb_grp_);
+      "io_and_status_controller/resend_robot_program", rclcpp::QoS(10).get_rmw_qos_profile(), service_cb_grp_);
   resend_robot_program_srv_->wait_for_service();
 
   feedback_ = std::make_shared<ur_dashboard_msgs::action::SetMode::Feedback>();
