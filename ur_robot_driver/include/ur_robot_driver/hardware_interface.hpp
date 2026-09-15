@@ -44,6 +44,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 // ros2_control hardware_interface
@@ -121,9 +122,10 @@ public:
 
   hardware_interface::CallbackReturn on_init(const hardware_interface::HardwareComponentInterfaceParams& params) final;
 
-  std::vector<hardware_interface::StateInterface> export_state_interfaces() final;
-
-  std::vector<hardware_interface::CommandInterface> export_command_interfaces() final;
+  // Every state/command interface this driver exports (joints, and every gpio/sensor below) is
+  // declared in the URDF (see ur.ros2_control.xacro), so the default on_export_state_interfaces()/
+  // on_export_command_interfaces() already builds and registers all of them - no
+  // export_unlisted_*_interface_descriptions() override is needed.
 
   hardware_interface::CallbackReturn on_configure(const rclcpp_lifecycle::State& previous_state) final;
   hardware_interface::CallbackReturn on_activate(const rclcpp_lifecycle::State& previous_state) final;
@@ -161,6 +163,9 @@ protected:
 
   // stop function used by on_shutdown and on_cleanup
   hardware_interface::CallbackReturn stop();
+
+  // Builds every interface name cache below, called once from on_init().
+  void build_interface_names(const std::string& tf_prefix);
 
   void initAsyncIO();
   void checkAsyncIO();
@@ -334,6 +339,70 @@ protected:
 
   std::unique_ptr<urcl::rtde_interface::DataPackage> data_package_buffer_;
   std::function<bool()> get_data_package;
+
+  // Interface names, built once in on_init() (matching kassow_kord_hardware_interface's
+  // convention) instead of concatenating "<prefix>/<interface>" fresh on every read()/write()
+  // cycle. set_state()/get_command()/set_command() still do a name lookup per call - only the
+  // string-building is cached, not the resolved handle.
+  std::vector<std::string> joint_position_state_names_;
+  std::vector<std::string> joint_velocity_state_names_;
+  std::vector<std::string> joint_effort_state_names_;
+  std::vector<std::string> joint_position_command_names_;
+  std::vector<std::string> joint_velocity_command_names_;
+  std::vector<std::string> joint_effort_command_names_;
+
+  // Plain state interfaces with no corresponding command interface: cached name plus pointer to
+  // the source value, pushed via set_state() in a single loop once per read() cycle.
+  std::vector<std::pair<std::string, double*>> state_push_list_;
+
+  // Command interfaces read/written individually at their own call site (async thread, force
+  // mode, passthrough trajectory, tool contact) rather than in a single read()/write() batch,
+  // since those call sites run on different threads/cycles than the RT read()/write() pair.
+  std::string io_async_success_name_;
+  std::string target_speed_fraction_cmd_name_;
+  std::string scaling_async_success_name_;
+  std::string resend_robot_program_cmd_name_;
+  std::string resend_robot_program_async_success_name_;
+  std::string hand_back_control_cmd_name_;
+  std::string hand_back_control_async_success_name_;
+  std::string payload_mass_name_;
+  std::array<std::string, 3> payload_cog_names_;
+  std::string payload_async_success_name_;
+  std::array<std::string, 6> friction_model_viscous_names_;
+  std::array<std::string, 6> friction_model_coulomb_names_;
+  std::string friction_model_async_success_name_;
+  std::array<std::string, 6> force_mode_task_frame_names_;
+  std::array<std::string, 6> force_mode_selection_vector_names_;
+  std::array<std::string, 6> force_mode_wrench_names_;
+  std::array<std::string, 6> force_mode_limits_names_;
+  std::string force_mode_type_name_;
+  std::string force_mode_async_success_name_;
+  std::string force_mode_disable_cmd_name_;
+  std::string force_mode_damping_name_;
+  std::string force_mode_gain_scaling_name_;
+  std::array<std::string, 18> standard_dig_out_bits_cmd_names_;
+  std::array<std::string, 2> standard_analog_output_cmd_names_;
+  std::string analog_output_domain_cmd_name_;
+  std::string tool_voltage_cmd_name_;
+  std::string zero_ftsensor_cmd_name_;
+  std::string zero_ftsensor_async_success_name_;
+  std::string freedrive_mode_async_success_name_;
+  std::string freedrive_mode_enable_name_;
+  std::string freedrive_mode_abort_name_;
+  std::string passthrough_transfer_state_name_;
+  std::string passthrough_time_from_start_name_;
+  std::string passthrough_abort_name_;
+  std::string passthrough_trajectory_size_name_;
+  std::array<std::string, 6> passthrough_setpoint_positions_names_;
+  std::array<std::string, 6> passthrough_setpoint_velocities_names_;
+  std::array<std::string, 6> passthrough_setpoint_accelerations_names_;
+  std::string tool_contact_set_state_name_;
+
+  // Written from more than one call site (including the async URCL callback threads
+  // trajectory_done_callback()/tool_contact_callback()), so pushed via set_state() directly at
+  // each write, not batched into state_push_list_.
+  std::string tool_contact_result_name_;
+  std::string tool_contact_state_name_;
 };
 }  // namespace ur_robot_driver
 

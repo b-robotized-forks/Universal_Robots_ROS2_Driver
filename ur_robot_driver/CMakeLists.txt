@@ -205,6 +205,11 @@ if(BUILD_TESTING)
   find_package(ur_msgs REQUIRED)
   find_package(launch_testing_ament_cmake)
 
+  find_package(ament_cmake_gmock REQUIRED)
+  ament_add_gmock(test_hardware_interface_exports test/test_hardware_interface_exports.cpp)
+  target_link_libraries(test_hardware_interface_exports ur_robot_driver_plugin)
+  ament_target_dependencies(test_hardware_interface_exports hardware_interface)
+
   add_launch_test(test/test_mock_hardware.py
     TIMEOUT
       800
