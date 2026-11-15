@@ -43,7 +43,8 @@
     <!-- Add URDF transmission elements (for ros_control) -->
     <!--<xacro:ur_arm_transmission prefix="${prefix}" hw_interface="${transmission_hw_interface}" />-->
     <!-- Placeholder for ros2_control transmission which don't yet exist -->
-    <xacro:property name="is_async" value="${use_mock_hardware == 0 and scheduling_policy != ''}"/>
+    <!-- Async when a scheduling policy is set, also for mock hardware -->
+    <xacro:property name="is_async" value="${scheduling_policy != ''}"/>
 
     <ros2_control name="${name}" type="system" rw_rate="${rw_rate}" is_async="${is_async}">
       <xacro:if value="${is_async}">
