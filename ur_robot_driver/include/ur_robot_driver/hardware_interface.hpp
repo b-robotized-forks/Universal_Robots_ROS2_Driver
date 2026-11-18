@@ -42,6 +42,7 @@
 // System
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -173,6 +174,13 @@ protected:
 
   void initAsyncIO();
   void checkAsyncIO();
+  // Pending connector T2 runtime command, or the configured startup voltage once a program is connected.
+  void handleConnectorT2Voltage();
+  // ur_driver_->setToolVoltageT2. False when the driver is not up yet.
+  virtual bool sendToolVoltageT2(int voltage);
+  // Decides whether connector T2 can be commanded and whether its RTDE fields survived negotiation.
+  // Called once from on_configure, after the driver exists and after any RTDE client reset.
+  void configureToolConnectorT2();
   void updateNonDoubleValues();
   void extractToolPose();
   void transformForceTorque();
@@ -204,8 +212,24 @@ protected:
   uint32_t runtime_state_;
   bool controllers_initialized_;
 
-  std::bitset<18> actual_dig_out_bits_;
-  std::bitset<18> actual_dig_in_bits_;
+  // actual_digital_output_bits: 0-7 standard, 8-15 configurable, 16-17 T0_DO, 18-21 T1_DO0-T1_DO3.
+  // T1_DO0 is the Smart Panel LED. Command index i >= 16 is tool digital pin (i - 16), so 18-21 are tool pins 2-5.
+  static constexpr size_t DIGITAL_OUTPUT_COUNT = 22;
+  // actual_digital_input_bits: 0-7 standard, 8-15 configurable, 16-17 T0_CI.
+  // CB7 tool flange V2 bits 18-23 are the T1 Smart Panel inputs B0 B1 B2 SB3 SB4 SD:
+  // 18 B0 T1_DI0 Left, 19 B1 T1_DI1 Center, 20 B2 T1_DI2 Right,
+  // 21 SB3 T1_CI0 and 22 SB4 T1_CI1 are a configurable safety-rated 2PE and can be used as the Freedrive pair,
+  // 23 SD T1_CONNECTED Smart Panel detect.
+  static constexpr size_t STANDARD_DIGITAL_INPUT_COUNT = 18;
+  static constexpr size_t T1_SMART_PANEL_DIGITAL_INPUT_BIT = 18;
+  static constexpr size_t T1_SMART_PANEL_DIGITAL_INPUT_COUNT = 3;
+  static constexpr size_t T1_CONFIGURABLE_DIGITAL_INPUT_BIT = 21;
+  static constexpr size_t T1_CONFIGURABLE_DIGITAL_INPUT_COUNT = 2;
+  static constexpr size_t T1_CONNECTED_BIT = 23;
+  static constexpr size_t DIGITAL_INPUT_COUNT = 24;
+
+  std::bitset<DIGITAL_OUTPUT_COUNT> actual_dig_out_bits_;
+  std::bitset<DIGITAL_INPUT_COUNT> actual_dig_in_bits_;
   std::array<double, 2> standard_analog_input_;
   std::array<double, 2> standard_analog_output_;
   std::bitset<4> analog_io_types_;
@@ -215,6 +239,12 @@ protected:
   int32_t tool_output_voltage_;
   double tool_output_current_;
   double tool_temperature_;
+  // Connector T2. tool_t2_supported_ is the version and flange check and gates commands.
+  // tool_t2_telemetry_ is whether the negotiated RTDE recipe still contains the T2 fields.
+  bool tool_t2_supported_{ false };
+  bool tool_t2_telemetry_{ false };
+  int32_t tool_output_voltage_2_{ 0 };
+  double tool_output_current_2_{ std::numeric_limits<double>::quiet_NaN() };
   double speed_scaling_;
   double target_speed_fraction_;
   double speed_scaling_combined_;
@@ -224,10 +254,18 @@ protected:
   std::bitset<11> safety_status_bits_;
 
   // asynchronous commands
-  std::array<double, 18> standard_dig_out_bits_cmd_;
+  std::array<double, DIGITAL_OUTPUT_COUNT> standard_dig_out_bits_cmd_;
   std::array<double, 2> standard_analog_output_cmd_;
   double analog_output_domain_cmd_;
   double tool_voltage_cmd_;
+  double tool_voltage_t2_cmd_{ NO_NEW_CMD_ };
+  // tool_voltage_t2 requested without tool communication. Applied by checkAsyncIO when the control
+  // program connects, through its own state rather than tool_voltage_t2_cmd_ / io_async_success_.
+  // Unset when the value is written into the control script instead, or when the parameter is empty.
+  std::optional<int> startup_tool_voltage_t2_;
+  // Only read and written from checkAsyncIO, which runs on the async thread.
+  bool startup_tool_voltage_t2_sent_{ false };
+  bool startup_tool_voltage_t2_error_reported_{ false };
   double io_async_success_;
   double target_speed_fraction_cmd_;
   double scaling_async_success_;
@@ -304,12 +342,14 @@ protected:
   double gravity_async_success_;
 
   // copy of non double values
-  std::array<double, 18> actual_dig_out_bits_copy_;
-  std::array<double, 18> actual_dig_in_bits_copy_;
+  std::array<double, DIGITAL_OUTPUT_COUNT> actual_dig_out_bits_copy_;
+  std::array<double, DIGITAL_INPUT_COUNT> actual_dig_in_bits_copy_;
   std::array<double, 4> analog_io_types_copy_;
   double tool_mode_copy_;
   std::array<double, 2> tool_analog_input_types_copy_;
   double tool_output_voltage_copy_;
+  double tool_flange_type_{ static_cast<double>(urcl::ToolFlangeType::UNKNOWN) };
+  double tool_output_voltage_2_copy_{ std::numeric_limits<double>::quiet_NaN() };
   double robot_mode_copy_;
   double safety_mode_copy_;
   std::array<double, 4> robot_status_bits_copy_;
@@ -357,6 +397,8 @@ protected:
   std::function<bool()> get_data_package;
 
   bool use_currents_as_efforts_ = true;
+
+  urcl::ControlBoxType control_box_type_ = urcl::ControlBoxType::UNKNOWN;
 };
 }  // namespace ur_robot_driver
 

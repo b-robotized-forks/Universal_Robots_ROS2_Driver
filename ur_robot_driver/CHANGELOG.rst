@@ -1,3 +1,21 @@
+3.11.0 (2026-11-13)
+-------------------
+* Add g-Series 48v T2 tool connector support (`#2029 <https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver/issues/2029>`_)
+* [fix] Start and end tool contact only once per request (backport `#2078 <https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver/issues/2078>`_) (`#2083 <https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver/issues/2083>`_)
+* Add launch support for g-series robots (backport `#2052 <https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver/issues/2052>`_) (`#2062 <https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver/issues/2062>`_)
+* Write DOUT 0-7 to CO8-CO15 on a CB7 (backport `#2047 <https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver/issues/2047>`_) (`#2057 <https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver/issues/2057>`_)
+* Add T1 connector I/Os (backport `#2048 <https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver/issues/2048>`_) (`#2060 <https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver/issues/2060>`_)
+* Contributors: Rune Søe-Knudsen, mergify[bot]
+
+3.10.0 (2026-10-20)
+-------------------
+* [move_until_node] Do not force an illegal terminal transition on an unrequested CANCELED child result (backport `#2003 <https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver/issues/2003>`_) (`#2015 <https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver/issues/2015>`_)
+  Co-authored-by: Christian Rishøj <christian@rishoj.net>
+* Make urscript_interface and dashboard_client startup interruptible (bugfix `#2006 <https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver/issues/2006>`_) (`#2009 <https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver/issues/2009>`_)
+* Specify minimum required PolyScopeX version in robot_state_helper output (backport `#1992 <https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver/issues/1992>`_) (`#1999 <https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver/issues/1999>`_)
+* Currents as efforts (backport `#1918 <https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver/issues/1918>`_) (`#1990 <https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver/issues/1990>`_)
+* Contributors: mergify[bot]
+
 3.9.0 (2026-09-11)
 ------------------
 * Allow using blocking read in controller manager (backport `#1760 <https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver/issues/1760>`_) (`#1920 <https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver/issues/1920>`_)

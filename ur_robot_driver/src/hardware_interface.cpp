@@ -38,11 +38,13 @@
 //----------------------------------------------------------------------
 #include <algorithm>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "ur_client_library/exceptions.h"
+#include "ur_client_library/ur/datatypes.h"
 #include "ur_client_library/ur/tool_communication.h"
 #include "ur_client_library/ur/version_information.h"
 #include "ur_client_library/ur/robot_receive_timeout.h"
@@ -51,6 +53,7 @@
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "ur_robot_driver/hardware_interface.hpp"
 #include "ur_robot_driver/mode_compatibility.hpp"
+#include "ur_robot_driver/tool_contact_request.hpp"
 #include "ur_robot_driver/urcl_log_handler.hpp"
 
 namespace rtde = urcl::rtde_interface;
@@ -88,6 +91,12 @@ RobotTypeWithSeries robotTypeFromString(const std::string& robot_type_str)
     return { urcl::RobotType::UR30, urcl::RobotSeries::UR_SERIES };
   } else if (robot_type_str == "ur8long") {
     return { urcl::RobotType::UR8LONG, urcl::RobotSeries::UR_SERIES };
+  } else if (robot_type_str == "ur10g-1750") {
+    return { urcl::RobotType::UR10G_1750, urcl::RobotSeries::G_SERIES };
+  } else if (robot_type_str == "ur17g-1300") {
+    return { urcl::RobotType::UR17G_1300, urcl::RobotSeries::G_SERIES };
+  } else if (robot_type_str == "ur18g-950") {
+    return { urcl::RobotType::UR18G_950, urcl::RobotSeries::G_SERIES };
   } else {
     throw std::invalid_argument("Unknown robot type: " + robot_type_str);
   }
@@ -245,12 +254,31 @@ std::vector<hardware_interface::StateInterface> URPositionHardwareInterface::exp
     }
   }
 
-  for (size_t i = 0; i < 18; ++i) {
+  for (size_t i = 0; i < actual_dig_out_bits_copy_.size(); ++i) {
     state_interfaces.emplace_back(hardware_interface::StateInterface(
         tf_prefix + "gpio", "digital_output_" + std::to_string(i), &actual_dig_out_bits_copy_[i]));
+  }
+
+  for (size_t i = 0; i < STANDARD_DIGITAL_INPUT_COUNT; ++i) {
     state_interfaces.emplace_back(hardware_interface::StateInterface(
         tf_prefix + "gpio", "digital_input_" + std::to_string(i), &actual_dig_in_bits_copy_[i]));
   }
+
+  // Bits 18-20 are B0 B1 B2 (T1_DI0 Left, T1_DI1 Center, T1_DI2 Right).
+  // Bits 21-22 are SB3 SB4 (T1_CI0, T1_CI1): a configurable safety-rated 2PE that can be used as the Freedrive pair.
+  // Bit 23 is SD, T1_CONNECTED, Smart Panel detect.
+  for (size_t i = 0; i < T1_CONFIGURABLE_DIGITAL_INPUT_COUNT; ++i) {
+    state_interfaces.emplace_back(hardware_interface::StateInterface(
+        tf_prefix + "gpio", "tool_t1_configurable_digital_input_" + std::to_string(i),
+        &actual_dig_in_bits_copy_[T1_CONFIGURABLE_DIGITAL_INPUT_BIT + i]));
+  }
+  for (size_t i = 0; i < T1_SMART_PANEL_DIGITAL_INPUT_COUNT; ++i) {
+    state_interfaces.emplace_back(
+        hardware_interface::StateInterface(tf_prefix + "gpio", "tool_t1_digital_input_" + std::to_string(i),
+                                           &actual_dig_in_bits_copy_[T1_SMART_PANEL_DIGITAL_INPUT_BIT + i]));
+  }
+  state_interfaces.emplace_back(hardware_interface::StateInterface(tf_prefix + "gpio", "tool_t1_connected",
+                                                                   &actual_dig_in_bits_copy_[T1_CONNECTED_BIT]));
 
   for (size_t i = 0; i < 11; ++i) {
     state_interfaces.emplace_back(hardware_interface::StateInterface(
@@ -280,6 +308,12 @@ std::vector<hardware_interface::StateInterface> URPositionHardwareInterface::exp
 
   state_interfaces.emplace_back(
       hardware_interface::StateInterface(tf_prefix + "gpio", "tool_output_voltage", &tool_output_voltage_copy_));
+  state_interfaces.emplace_back(
+      hardware_interface::StateInterface(tf_prefix + "gpio", "tool_flange_type", &tool_flange_type_));
+  state_interfaces.emplace_back(
+      hardware_interface::StateInterface(tf_prefix + "gpio", "tool_output_voltage_2", &tool_output_voltage_2_copy_));
+  state_interfaces.emplace_back(
+      hardware_interface::StateInterface(tf_prefix + "gpio", "tool_output_current_2", &tool_output_current_2_));
 
   state_interfaces.emplace_back(
       hardware_interface::StateInterface(tf_prefix + "gpio", "robot_mode", &robot_mode_copy_));
@@ -478,7 +512,7 @@ std::vector<hardware_interface::CommandInterface> URPositionHardwareInterface::e
   command_interfaces.emplace_back(
       hardware_interface::CommandInterface(tf_prefix + "gravity", "gravity_async_success", &gravity_async_success_));
 
-  for (size_t i = 0; i < 18; ++i) {
+  for (size_t i = 0; i < standard_dig_out_bits_cmd_.size(); ++i) {
     command_interfaces.emplace_back(hardware_interface::CommandInterface(
         tf_prefix + "gpio", "standard_digital_output_cmd_" + std::to_string(i), &standard_dig_out_bits_cmd_[i]));
   }
@@ -492,6 +526,8 @@ std::vector<hardware_interface::CommandInterface> URPositionHardwareInterface::e
 
   command_interfaces.emplace_back(
       hardware_interface::CommandInterface(tf_prefix + "gpio", "tool_voltage_cmd", &tool_voltage_cmd_));
+  command_interfaces.emplace_back(
+      hardware_interface::CommandInterface(tf_prefix + "gpio", "tool_voltage_t2_cmd", &tool_voltage_t2_cmd_));
 
   command_interfaces.emplace_back(
       hardware_interface::CommandInterface(tf_prefix + "zero_ftsensor", "zero_ftsensor_cmd", &zero_ftsensor_cmd_));
@@ -614,6 +650,15 @@ URPositionHardwareInterface::on_configure(const rclcpp_lifecycle::State& previou
 
   const bool use_tool_communication = (info_.hardware_parameters["use_tool_communication"] == "true") ||
                                       (info_.hardware_parameters["use_tool_communication"] == "True");
+  // Empty means "do not set a startup voltage". A value is applied whether or not tool communication
+  // is enabled: with it, the control script sets the voltage; without it, the driver sends the
+  // voltage once the control program has connected.
+  startup_tool_voltage_t2_.reset();
+  startup_tool_voltage_t2_sent_ = false;
+  startup_tool_voltage_t2_error_reported_ = false;
+  const auto tool_voltage_t2_it = info_.hardware_parameters.find("tool_voltage_t2");
+  const std::string tool_voltage_t2_parameter =
+      tool_voltage_t2_it == info_.hardware_parameters.end() ? "" : tool_voltage_t2_it->second;
 
   // Hash of the calibration reported by the robot. This is used for validating the robot
   // description is using the correct calibration. If the robot's calibration doesn't match this
@@ -621,61 +666,6 @@ URPositionHardwareInterface::on_configure(const rclcpp_lifecycle::State& previou
   // endeffector might be inaccurate. See the "ur_calibration" package on help how to generate your
   // own hash matching your actual robot.
   const std::string calibration_checksum = info_.hardware_parameters["kinematics/hash"];
-
-  std::unique_ptr<urcl::ToolCommSetup> tool_comm_setup;
-  if (use_tool_communication) {
-    tool_comm_setup = std::make_unique<urcl::ToolCommSetup>();
-
-    using ToolVoltageT = std::underlying_type<urcl::ToolVoltage>::type;
-
-    // Tool voltage that will be set as soon as the UR-Program on the robot is started. Note: This
-    // parameter is only evaluated, when the parameter "use_tool_communication" is set to TRUE.
-    // Then, this parameter is required.}
-    const ToolVoltageT tool_voltage = std::stoi(info_.hardware_parameters["tool_voltage"]);
-    tool_comm_setup->setToolVoltage(static_cast<urcl::ToolVoltage>(tool_voltage));
-
-    using ParityT = std::underlying_type<urcl::Parity>::type;
-
-    // Parity used for tool communication. Will be set as soon as the UR-Program on the robot is
-    // started. Can be 0 (None), 1 (odd) and 2 (even).
-    //
-    // Note: This parameter is only evaluated, when the parameter "use_tool_communication"
-    // is set to TRUE.  Then, this parameter is required.
-    const ParityT parity = std::stoi(info_.hardware_parameters["tool_parity"]);
-    tool_comm_setup->setParity(static_cast<urcl::Parity>(parity));
-
-    // Baud rate used for tool communication. Will be set as soon as the UR-Program on the robot is
-    // started. See UR documentation for valid baud rates.
-    //
-    // Note: This parameter is only evaluated, when the parameter "use_tool_communication"
-    // is set to TRUE.  Then, this parameter is required.
-    const int baud_rate = std::stoi(info_.hardware_parameters["tool_baud_rate"]);
-    tool_comm_setup->setBaudRate(static_cast<uint32_t>(baud_rate));
-
-    // Number of stop bits used for tool communication. Will be set as soon as the UR-Program on the robot is
-    // started. Can be 1 or 2.
-    //
-    // Note: This parameter is only evaluated, when the parameter "use_tool_communication"
-    // is set to TRUE.  Then, this parameter is required.
-    const int stop_bits = std::stoi(info_.hardware_parameters["tool_stop_bits"]);
-    tool_comm_setup->setStopBits(static_cast<uint32_t>(stop_bits));
-
-    // Number of idle chars for the RX unit used for tool communication. Will be set as soon as the UR-Program on the
-    // robot is started. Valid values: min=1.0, max=40.0
-    //
-    // Note: This parameter is only evaluated, when the parameter "use_tool_communication"
-    // is set to TRUE.  Then, this parameter is required.
-    const int rx_idle_chars = std::stoi(info_.hardware_parameters["tool_rx_idle_chars"]);
-    tool_comm_setup->setRxIdleChars(rx_idle_chars);
-
-    // Number of idle chars for the TX unit used for tool communication. Will be set as soon as the UR-Program on the
-    // robot is started. Valid values: min=0.0, max=40.0
-    //
-    // Note: This parameter is only evaluated, when the parameter "use_tool_communication"
-    // is set to TRUE.  Then, this parameter is required.
-    const int tx_idle_chars = std::stoi(info_.hardware_parameters["tool_tx_idle_chars"]);
-    tool_comm_setup->setTxIdleChars(tx_idle_chars);
-  }
 
   // Obtain the tf_prefix which is needed for the logging handler so that log messages from different arms are
   // distiguishable in the log
@@ -701,6 +691,56 @@ URPositionHardwareInterface::on_configure(const rclcpp_lifecycle::State& previou
       }
     }
 
+    std::unique_ptr<urcl::ToolCommSetup> tool_comm_setup;
+    if (use_tool_communication) {
+      tool_comm_setup = std::make_unique<urcl::ToolCommSetup>();
+
+      using ToolVoltageT = std::underlying_type<urcl::ToolVoltage>::type;
+
+      // Tool voltage on connector T0, applied when the UR program starts. Only evaluated when
+      // use_tool_communication is true. std::stoi("12.5") returns 12, so the whole string has to
+      // be consumed and the value has to be exactly 0, 12 or 24.
+      const std::string& tool_voltage_parameter = info_.hardware_parameters["tool_voltage"];
+      std::size_t parsed_chars = 0;
+      const ToolVoltageT tool_voltage = std::stoi(tool_voltage_parameter, &parsed_chars);
+      if (parsed_chars != tool_voltage_parameter.size() ||
+          (tool_voltage != 0 && tool_voltage != 12 && tool_voltage != 24)) {
+        throw std::invalid_argument("tool_voltage must be exactly 0, 12 or 24, got '" + tool_voltage_parameter + "'");
+      }
+      tool_comm_setup->setToolVoltage(static_cast<urcl::ToolVoltage>(tool_voltage));
+
+      using ParityT = std::underlying_type<urcl::Parity>::type;
+      const ParityT parity = std::stoi(info_.hardware_parameters["tool_parity"]);
+      tool_comm_setup->setParity(static_cast<urcl::Parity>(parity));
+      const int baud_rate = std::stoi(info_.hardware_parameters["tool_baud_rate"]);
+      tool_comm_setup->setBaudRate(static_cast<uint32_t>(baud_rate));
+      const int stop_bits = std::stoi(info_.hardware_parameters["tool_stop_bits"]);
+      tool_comm_setup->setStopBits(static_cast<uint32_t>(stop_bits));
+      const int rx_idle_chars = std::stoi(info_.hardware_parameters["tool_rx_idle_chars"]);
+      tool_comm_setup->setRxIdleChars(rx_idle_chars);
+      const int tx_idle_chars = std::stoi(info_.hardware_parameters["tool_tx_idle_chars"]);
+      tool_comm_setup->setTxIdleChars(tx_idle_chars);
+    }
+
+    // Connector T2 is independent of tool communication. std::stoi("48.5") returns 48, so the whole
+    // string has to be consumed. With tool communication the control script sets the voltage and the
+    // UrDriver constructor throws unless the robot reports Tool Flange V2. Without it, the value is
+    // sent when the control program connects, which also requires PolyScope X 10.15.
+    if (!tool_voltage_t2_parameter.empty()) {
+      std::size_t parsed_chars = 0;
+      const int tool_voltage_t2 = std::stoi(tool_voltage_t2_parameter, &parsed_chars);
+      if (parsed_chars != tool_voltage_t2_parameter.size() ||
+          (tool_voltage_t2 != 0 && tool_voltage_t2 != 24 && tool_voltage_t2 != 48)) {
+        throw std::invalid_argument("tool_voltage_t2 must be exactly 0, 24 or 48, got '" + tool_voltage_t2_parameter +
+                                    "'");
+      }
+      if (use_tool_communication) {
+        tool_comm_setup->setToolVoltageT2(static_cast<urcl::ToolVoltage>(tool_voltage_t2));
+      } else {
+        startup_tool_voltage_t2_ = tool_voltage_t2;
+      }
+    }
+
     rtde_comm_has_been_started_ = false;
     urcl::UrDriverConfiguration driver_config;
     driver_config.robot_ip = robot_ip;
@@ -720,8 +760,11 @@ URPositionHardwareInterface::on_configure(const rclcpp_lifecycle::State& previou
     driver_config.handle_program_state =
         std::bind(&URPositionHardwareInterface::handleRobotProgramState, this, std::placeholders::_1);
     ur_driver_ = std::make_unique<urcl::UrDriver>(driver_config);
-    if (ur_driver_->getControlFrequency() != info_.rw_rate) {
-      ur_driver_->resetRTDEClient(output_recipe, input_recipe, info_.rw_rate);
+    configureToolConnectorT2();
+    if (startup_tool_voltage_t2_.has_value() && !tool_t2_supported_) {
+      throw std::runtime_error("tool_voltage_t2 is set, but connector T2 is not available on this robot. It requires "
+                               "PolyScope X 10.15 or "
+                               "later and Tool Flange V2.");
     }
     data_package_buffer_ = std::make_unique<rtde::DataPackage>(ur_driver_->getRTDEOutputRecipe());
   } catch (urcl::ToolCommNotAvailable& e) {
@@ -743,6 +786,10 @@ URPositionHardwareInterface::on_configure(const rclcpp_lifecycle::State& previou
     }
     return hardware_interface::CallbackReturn::ERROR;
   } catch (urcl::UrException& e) {
+    RCLCPP_FATAL_STREAM(rclcpp::get_logger("URPositionHardwareInterface"), e.what());
+    return hardware_interface::CallbackReturn::ERROR;
+    // URCL throws std::runtime_error for a T0 voltage other than 0/12/24 or a T2 voltage other than 0/24/48.
+  } catch (const std::exception& e) {
     RCLCPP_FATAL_STREAM(rclcpp::get_logger("URPositionHardwareInterface"), e.what());
     return hardware_interface::CallbackReturn::ERROR;
   }
@@ -777,6 +824,8 @@ URPositionHardwareInterface::on_configure(const rclcpp_lifecycle::State& previou
       return hardware_interface::CallbackReturn::ERROR;
     }
   }
+
+  control_box_type_ = ur_driver_->getPrimaryClient()->getControlBoxType();
 
   RCLCPP_INFO(rclcpp::get_logger("URPositionHardwareInterface"), "Calibration checksum: '%s'.",
               calibration_checksum.c_str());
@@ -929,6 +978,11 @@ hardware_interface::return_type URPositionHardwareInterface::read(const rclcpp::
     readData(data_package_buffer_, "tool_analog_input1", tool_analog_input_[1]);
     readData(data_package_buffer_, "tool_output_voltage", tool_output_voltage_);
     readData(data_package_buffer_, "tool_output_current", tool_output_current_);
+    // These fields are absent when negotiation dropped them. readData throws on a missing field.
+    if (tool_t2_telemetry_) {
+      readData(data_package_buffer_, "tool_output_voltage_2", tool_output_voltage_2_);
+      readData(data_package_buffer_, "tool_output_current_2", tool_output_current_2_);
+    }
     readData(data_package_buffer_, "tool_temperature", tool_temperature_);
     readData(data_package_buffer_, "robot_mode", robot_mode_);
     readData(data_package_buffer_, "safety_mode", safety_mode_);
@@ -1059,9 +1113,69 @@ void URPositionHardwareInterface::handleRobotProgramState(bool program_running)
   robot_program_running_ = program_running;
 }
 
+void URPositionHardwareInterface::configureToolConnectorT2()
+{
+  const urcl::VersionInformation min_version = urcl::VersionInformation::fromString("10.15.0");
+  const auto flange_is_v2 = [this]() {
+    return ur_driver_->getRTDEWriter().getToolFlangeType() == urcl::ToolFlangeType::V2;
+  };
+  tool_t2_supported_ = ur_driver_->getVersion() >= min_version && flange_is_v2();
+
+  // Snapshot the fields the driver already requires. ignore_unavailable_outputs applies to the
+  // whole recipe, so a later check has to prove these survived when T2 fields were added.
+  const std::vector<std::string> required_recipe = ur_driver_->getRTDEOutputRecipe();
+  auto output_recipe = required_recipe;
+  bool added_t2_field = false;
+  if (tool_t2_supported_) {
+    for (const char* field : { "tool_output_voltage_2", "tool_output_current_2" }) {
+      if (std::find(output_recipe.begin(), output_recipe.end(), field) == output_recipe.end()) {
+        output_recipe.push_back(field);
+        added_t2_field = true;
+      }
+    }
+  }
+
+  // One reset covers both a control-frequency change and the extra T2 fields. ignore_unavailable is
+  // set only when we added fields, so a controller that rejects the T2 outputs drops those fields
+  // instead of failing startup.
+  const bool frequency_mismatch = ur_driver_->getControlFrequency() != info_.rw_rate;
+  if (frequency_mismatch || added_t2_field) {
+    ur_driver_->resetRTDEClient(output_recipe, ur_driver_->getRTDEInputRecipe(), info_.rw_rate, added_t2_field);
+    // The flange is UNKNOWN for a moment during the reset. Read it again and fail closed.
+    tool_t2_supported_ = ur_driver_->getVersion() >= min_version && flange_is_v2();
+    output_recipe = ur_driver_->getRTDEOutputRecipe();
+    if (added_t2_field) {
+      for (const auto& field : required_recipe) {
+        if (std::find(output_recipe.begin(), output_recipe.end(), field) == output_recipe.end()) {
+          throw std::runtime_error("RTDE output recipe lost required field '" + field +
+                                   "' while negotiating connector T2 telemetry.");
+        }
+      }
+    }
+  }
+
+  const bool has_voltage =
+      std::find(output_recipe.begin(), output_recipe.end(), "tool_output_voltage_2") != output_recipe.end();
+  const bool has_current =
+      std::find(output_recipe.begin(), output_recipe.end(), "tool_output_current_2") != output_recipe.end();
+  // Commands, including OFF, stay available when the T2 fields were rejected. Only the readings go away.
+  tool_t2_telemetry_ = tool_t2_supported_ && has_voltage && has_current;
+  tool_flange_type_ = static_cast<double>(ur_driver_->getRTDEWriter().getToolFlangeType());
+  if (!tool_t2_telemetry_) {
+    tool_output_voltage_2_copy_ = NO_NEW_CMD_;
+    tool_output_current_2_ = NO_NEW_CMD_;
+  }
+
+  RCLCPP_INFO(rclcpp::get_logger("URPositionHardwareInterface"),
+              "Connector T2 %s (PolyScope %s, tool flange %s). T2 telemetry %s.",
+              tool_t2_supported_ ? "is available" : "is not available", ur_driver_->getVersion().toString().c_str(),
+              urcl::toolFlangeTypeString(ur_driver_->getRTDEWriter().getToolFlangeType()).c_str(),
+              tool_t2_telemetry_ ? "is available" : "is not available");
+}
+
 void URPositionHardwareInterface::initAsyncIO()
 {
-  for (size_t i = 0; i < 18; ++i) {
+  for (size_t i = 0; i < standard_dig_out_bits_cmd_.size(); ++i) {
     standard_dig_out_bits_cmd_[i] = NO_NEW_CMD_;
   }
 
@@ -1072,6 +1186,7 @@ void URPositionHardwareInterface::initAsyncIO()
   analog_output_domain_cmd_ = NO_NEW_CMD_;
 
   tool_voltage_cmd_ = NO_NEW_CMD_;
+  tool_voltage_t2_cmd_ = NO_NEW_CMD_;
 
   payload_mass_ = NO_NEW_CMD_;
   payload_center_of_gravity_ = { NO_NEW_CMD_, NO_NEW_CMD_, NO_NEW_CMD_ };
@@ -1083,20 +1198,92 @@ void URPositionHardwareInterface::initAsyncIO()
   friction_model_coulomb_.fill(NO_NEW_CMD_);
 }
 
+bool URPositionHardwareInterface::sendToolVoltageT2(const int voltage)
+{
+  if (ur_driver_ == nullptr) {
+    return false;
+  }
+  return ur_driver_->setToolVoltageT2(static_cast<urcl::ToolVoltage>(voltage));
+}
+
+void URPositionHardwareInterface::handleConnectorT2Voltage()
+{
+  if (startup_tool_voltage_t2_.has_value() && !robot_program_running_.load()) {
+    // Re-apply after the next program start. The control script connects the script-command socket
+    // before the reverse interface, so the program-running flag means setToolVoltageT2 will not fall
+    // back to replacing the program.
+    startup_tool_voltage_t2_sent_ = false;
+    startup_tool_voltage_t2_error_reported_ = false;
+  }
+
+  if (!std::isnan(tool_voltage_t2_cmd_)) {
+    // Copy first and clear only if the slot still holds this request, so a service call that arrives
+    // while setToolVoltageT2 is running is not overwritten. Its result is what the service waits on.
+    const double requested = tool_voltage_t2_cmd_;
+    // Only a command handled while a program is connected replaces the configured startup voltage.
+    // A request processed while stopped must not set the flag, or a program that starts before the
+    // next check would skip tool_voltage_t2.
+    if (robot_program_running_.load()) {
+      startup_tool_voltage_t2_sent_ = true;
+    }
+    // Reject the command here so a robot without T2 reports failure instead of throwing from URCL.
+    bool success = false;
+    bool handled = true;
+    if (!tool_t2_supported_) {
+      RCLCPP_ERROR(rclcpp::get_logger("URPositionHardwareInterface"), "Connector T2 is not available on this robot. It "
+                                                                      "requires PolyScope X 10.15 or later and Tool "
+                                                                      "Flange V2.");
+    } else {
+      success = sendToolVoltageT2(static_cast<int>(requested));
+      // A driver that is not up yet has not accepted the command, so leave it pending.
+      handled = ur_driver_ != nullptr || success;
+    }
+    if (handled && tool_voltage_t2_cmd_ == requested) {
+      tool_voltage_t2_cmd_ = NO_NEW_CMD_;
+      io_async_success_ = success;
+    }
+  } else if (startup_tool_voltage_t2_.has_value() && !startup_tool_voltage_t2_sent_ && robot_program_running_.load()) {
+    // Kept off the service command slot and its acknowledgement, so a runtime OFF request cannot be
+    // discarded or reported successful because of this write.
+    if (!tool_t2_supported_) {
+      RCLCPP_ERROR(rclcpp::get_logger("URPositionHardwareInterface"), "Connector T2 is not available on this robot. It "
+                                                                      "requires PolyScope X 10.15 or later and Tool "
+                                                                      "Flange V2.");
+      startup_tool_voltage_t2_sent_ = true;
+    } else if (sendToolVoltageT2(*startup_tool_voltage_t2_)) {
+      startup_tool_voltage_t2_sent_ = true;
+      startup_tool_voltage_t2_error_reported_ = false;
+    } else if (ur_driver_ != nullptr && !startup_tool_voltage_t2_error_reported_) {
+      RCLCPP_ERROR(rclcpp::get_logger("URPositionHardwareInterface"),
+                   "Setting the connector T2 startup voltage to %d failed. The driver will retry while the program is "
+                   "running.",
+                   *startup_tool_voltage_t2_);
+      startup_tool_voltage_t2_error_reported_ = true;
+    }
+  }
+}
+
 void URPositionHardwareInterface::checkAsyncIO()
 {
   if (!rtde_comm_has_been_started_) {
     return;
   }
-  for (size_t i = 0; i < 18; ++i) {
+  for (size_t i = 0; i < standard_dig_out_bits_cmd_.size(); ++i) {
     if (!std::isnan(standard_dig_out_bits_cmd_[i]) && ur_driver_ != nullptr) {
       if (i <= 7) {
-        io_async_success_ =
-            ur_driver_->getRTDEWriter().sendStandardDigitalOutput(i, static_cast<bool>(standard_dig_out_bits_cmd_[i]));
+        if (control_box_type_ == urcl::ControlBoxType::CB7) {
+          io_async_success_ = ur_driver_->getRTDEWriter().sendConfigurableDigitalOutput(
+              static_cast<uint8_t>(i + 8), static_cast<bool>(standard_dig_out_bits_cmd_[i]));
+        } else {
+          io_async_success_ = ur_driver_->getRTDEWriter().sendStandardDigitalOutput(
+              i, static_cast<bool>(standard_dig_out_bits_cmd_[i]));
+        }
       } else if (i <= 15) {
         io_async_success_ = ur_driver_->getRTDEWriter().sendConfigurableDigitalOutput(
             static_cast<uint8_t>(i - 8), static_cast<bool>(standard_dig_out_bits_cmd_[i]));
       } else {
+        // 16-17 are T0_DO0/T0_DO1 (tool pins 0-1). 18-21 are T1_DO0-T1_DO3 (tool pins 2-5).
+        // T1_DO0 is the Smart Panel LED.
         io_async_success_ = ur_driver_->getRTDEWriter().sendToolDigitalOutput(
             static_cast<uint8_t>(i - 16), static_cast<bool>(standard_dig_out_bits_cmd_[i]));
       }
@@ -1121,6 +1308,8 @@ void URPositionHardwareInterface::checkAsyncIO()
     io_async_success_ = ur_driver_->setToolVoltage(static_cast<urcl::ToolVoltage>(tool_voltage_cmd_));
     tool_voltage_cmd_ = NO_NEW_CMD_;
   }
+
+  handleConnectorT2Voltage();
 
   if (!std::isnan(target_speed_fraction_cmd_) && ur_driver_ != nullptr) {
     scaling_async_success_ = ur_driver_->getRTDEWriter().sendSpeedSlider(target_speed_fraction_cmd_);
@@ -1192,33 +1381,12 @@ void URPositionHardwareInterface::checkAsyncIO()
 
 void URPositionHardwareInterface::check_tool_contact_controller()
 {
-  static double cmd_state;
-  cmd_state = tool_contact_set_state_;
-
   if (ur_driver_ != nullptr) {
-    if (cmd_state == 2.0) {
-      bool success = ur_driver_->startToolContact();
-      if (success) {
-        // TOOL_CONTACT_EXECUTING
-        tool_contact_state_ = 3.0;
-        tool_contact_result_ = 3.0;
-      } else {
-        // TOOL_CONTACT_FAILURE_BEGIN
-        tool_contact_state_ = 4.0;
-      }
-
-    } else if (cmd_state == 5.0) {
-      bool success = ur_driver_->endToolContact();
-      if (success) {
-        // TOOL_CONTACT_SUCCESS_END
-        tool_contact_state_ = 6.0;
-      } else {
-        // TOOL_CONTACT_FAILURE_END
-        tool_contact_state_ = 7.0;
-      }
-    } else {
-      tool_contact_state_ = cmd_state;
-    }
+    // This runs in every write() cycle, while the controller keeps its command unchanged for as long
+    // as tool contact is executing. processToolContactCommand() sends each request only once.
+    processToolContactCommand(
+        tool_contact_set_state_, tool_contact_state_, tool_contact_result_,
+        [this]() { return ur_driver_->startToolContact(); }, [this]() { return ur_driver_->endToolContact(); });
   }
 }
 
@@ -1230,8 +1398,10 @@ void URPositionHardwareInterface::tool_contact_callback(urcl::control::ToolConta
 
 void URPositionHardwareInterface::updateNonDoubleValues()
 {
-  for (size_t i = 0; i < 18; ++i) {
+  for (size_t i = 0; i < actual_dig_out_bits_copy_.size(); ++i) {
     actual_dig_out_bits_copy_[i] = static_cast<double>(actual_dig_out_bits_[i]);
+  }
+  for (size_t i = 0; i < actual_dig_in_bits_copy_.size(); ++i) {
     actual_dig_in_bits_copy_[i] = static_cast<double>(actual_dig_in_bits_[i]);
   }
 
@@ -1249,6 +1419,13 @@ void URPositionHardwareInterface::updateNonDoubleValues()
   }
 
   tool_output_voltage_copy_ = static_cast<double>(tool_output_voltage_);
+  if (tool_t2_telemetry_) {
+    tool_output_voltage_2_copy_ = static_cast<double>(tool_output_voltage_2_);
+  } else {
+    // voltage_2 is an int32, so an unread 0 would publish as 0 V. Keep both readings NaN.
+    tool_output_voltage_2_copy_ = NO_NEW_CMD_;
+    tool_output_current_2_ = NO_NEW_CMD_;
+  }
   robot_mode_copy_ = static_cast<double>(robot_mode_);
   safety_mode_copy_ = static_cast<double>(safety_mode_);
   tool_mode_copy_ = static_cast<double>(tool_mode_);
@@ -1492,7 +1669,7 @@ hardware_interface::return_type URPositionHardwareInterface::perform_command_mod
   if (stop_modes_.size() != 0 && std::find(stop_modes_[0].begin(), stop_modes_[0].end(),
                                            StoppingInterface::STOP_TOOL_CONTACT) != stop_modes_[0].end()) {
     tool_contact_controller_running_ = false;
-    tool_contact_result_ = 3.0;
+    resetToolContactOnStop(tool_contact_set_state_, tool_contact_state_, tool_contact_result_);
     ur_driver_->endToolContact();
   }
 

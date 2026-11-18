@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>ur_controllers</name>
-  <version>3.9.0</version>
+  <version>3.11.0</version>
   <description>Provides controllers that use the speed scaling interface of Universal Robots.</description>
 
   <maintainer email="feex@universal-robots.com">Felix Exner</maintainer>
@@ -40,7 +40,7 @@
   <depend>tf2_geometry_msgs</depend>
   <depend>tf2_ros</depend>
   <depend>ur_dashboard_msgs</depend>
-  <depend>ur_msgs</depend>
+  <depend version_gte="2.7.0">ur_msgs</depend>
   <depend>control_msgs</depend>
   <depend>trajectory_msgs</depend>
   <depend>action_msgs</depend>
