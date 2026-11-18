@@ -18,7 +18,7 @@
     headless_mode:=false
     initial_positions:=${dict(shoulder_pan_joint=0.0,shoulder_lift_joint=-1.57,elbow_joint=0.0,wrist_1_joint=-1.57,wrist_2_joint=0.0,wrist_3_joint=0.0)}
     use_tool_communication:=false
-    tool_voltage:=0 tool_parity:=0 tool_baud_rate:=115200 tool_stop_bits:=1
+    tool_voltage:=0 tool_voltage_t2:='' tool_parity:=0 tool_baud_rate:=115200 tool_stop_bits:=1
     tool_rx_idle_chars:=1.5 tool_tx_idle_chars:=3.5 tool_device_name:=/tmp/ttyUR tool_tcp_port:=54321
     reverse_port:=50001
     script_sender_port:=50002
@@ -34,6 +34,7 @@
     thread_priority:=50
     cpu_affinity:=''
     ">
+    <!-- tool_voltage_t2 uses single quotes because this params attribute is double-quoted. An empty value means do not set a startup voltage. -->
     <!-- rw_rate of 0 uses the rate of the controller_manager -->
 
     <xacro:property name="config_kinematics_parameters" value="${xacro.load_yaml(kinematics_parameters_file)}"/>
@@ -48,7 +49,10 @@
     <!-- A self_paced thread does not sleep. The blocking read() of the robot paces it, so self_paced always uses the blocking read. -->
     <xacro:property name="use_non_blocking_read" value="${non_blocking_read and scheduling_policy not in ['self_paced', 'slave']}"/>
 
-    <ros2_control name="${name}" type="system" rw_rate="${rw_rate}" is_async="${is_async}">
+    <!-- convert any dashes in the name to underscores for ros2_control -->
+    <xacro:property name="hw_name" value="${name.replace('-', '_')}"/>
+
+    <ros2_control name="${hw_name}" type="system" rw_rate="${rw_rate}" is_async="${is_async}">
       <xacro:if value="${is_async}">
         <properties>
           <async scheduling_policy="${scheduling_policy}" print_warnings="true" thread_priority="${thread_priority}" affinity="${cpu_affinity}"/>
@@ -81,6 +85,9 @@
           <param name="use_tool_communication">${use_tool_communication}</param>
           <param name="kinematics/hash">${kinematics_hash}</param>
           <param name="tool_voltage">${tool_voltage}</param>
+          <xacro:if value="${tool_voltage_t2 != ''}">
+            <param name="tool_voltage_t2">${tool_voltage_t2}</param>
+          </xacro:if>
           <param name="tool_parity">${tool_parity}</param>
           <param name="tool_baud_rate">${tool_baud_rate}</param>
           <param name="tool_stop_bits">${tool_stop_bits}</param>
@@ -131,12 +138,18 @@
         <command_interface name="standard_digital_output_cmd_15"/>
         <command_interface name="standard_digital_output_cmd_16"/>
         <command_interface name="standard_digital_output_cmd_17"/>
+        <!-- T1_DO0-T1_DO3, tool digital pins 2-5. T1_DO0 is the Smart Panel LED. V2 tool flange only. -->
+        <command_interface name="standard_digital_output_cmd_18"/>
+        <command_interface name="standard_digital_output_cmd_19"/>
+        <command_interface name="standard_digital_output_cmd_20"/>
+        <command_interface name="standard_digital_output_cmd_21"/>
 
         <command_interface name="standard_analog_output_cmd_0"/>
         <command_interface name="standard_analog_output_cmd_1"/>
         <command_interface name="analog_output_domain_cmd"/>
 
         <command_interface name="tool_voltage_cmd"/>
+        <command_interface name="tool_voltage_t2_cmd"/>
 
         <command_interface name="io_async_success"/>
 
@@ -158,6 +171,10 @@
         <state_interface name="digital_output_15"/>
         <state_interface name="digital_output_16"/>
         <state_interface name="digital_output_17"/>
+        <state_interface name="digital_output_18"/>
+        <state_interface name="digital_output_19"/>
+        <state_interface name="digital_output_20"/>
+        <state_interface name="digital_output_21"/>
 
         <state_interface name="digital_input_0"/>
         <state_interface name="digital_input_1"/>
@@ -178,6 +195,13 @@
         <state_interface name="digital_input_16"/>
         <state_interface name="digital_input_17"/>
 
+        <state_interface name="tool_t1_digital_input_0"/> <!-- Smart Panel T1's left button, T1_DI0. -->
+        <state_interface name="tool_t1_digital_input_1"/> <!-- Smart Panel T1's center button, T1_DI1. -->
+        <state_interface name="tool_t1_digital_input_2"/> <!-- Smart Panel T1's right button, T1_DI2. -->
+        <state_interface name="tool_t1_configurable_digital_input_0"/> <!-- Smart Panel T1, T1_CI0. Configurable safety-rated 2PE that can be used as the Freedrive pair. -->
+        <state_interface name="tool_t1_configurable_digital_input_1"/> <!-- Smart Panel T1, T1_CI1. Configurable safety-rated 2PE that can be used as the Freedrive pair. -->
+        <state_interface name="tool_t1_connected"/> <!-- Smart Panel T1 detect, T1_CONNECTED. -->
+
         <state_interface name="standard_analog_output_0"/>
         <state_interface name="standard_analog_output_1"/>
 
@@ -193,6 +217,9 @@
         <state_interface name="tool_output_voltage"/>
         <state_interface name="tool_output_current"/>
         <state_interface name="tool_temperature"/>
+        <state_interface name="tool_flange_type"/>
+        <state_interface name="tool_output_voltage_2"/>
+        <state_interface name="tool_output_current_2"/>
 
         <state_interface name="tool_analog_input_0"/>
         <state_interface name="tool_analog_input_1"/>
