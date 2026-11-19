@@ -180,6 +180,7 @@ if(BUILD_TESTING)
   ament_target_dependencies(test_load_force_mode_controller
     controller_manager
     ros2_control_test_assets
+    tf2_ros
   )
   ament_add_gmock(test_load_freedrive_mode_controller
     test/test_load_freedrive_mode_controller.cpp
